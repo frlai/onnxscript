@@ -3,6 +3,7 @@
 """Test for the new Pattern and PatternBase classes."""
 
 import unittest
+from unittest import mock
 
 import onnx_ir as ir
 
@@ -12,6 +13,44 @@ from onnxscript.rewriter._basics import MatchFailureError
 
 class PatternTest(unittest.TestCase):
     """Test Pattern functionality."""
+
+    def test_multi_output_rejects_incompatible_root_without_scanning_graph(self):
+        def two_outputs(op, x):
+            return op.Cast(x, to=1), op.Neg(x)
+
+        matcher = pattern.Pattern(two_outputs)
+        for domain, op_type, to in (("", "Relu", 1), ("custom", "Cast", 1), ("", "Cast", 10)):
+            with self.subTest(domain=domain, op_type=op_type, to=to):
+                x = ir.Value(name="x")
+                root = ir.Node(domain, op_type, [x], {"to": ir.AttrInt64("to", to)})
+                other = ir.Node("", "Neg", [x])
+                graph = ir.Graph([x], [root.outputs[0], other.outputs[0]], nodes=[root, other])
+                model = ir.Model(graph, ir_version=10)
+                # Scanning for sibling outputs on every impossible root makes
+                # rewrite time quadratic even when no root can match.
+                with mock.patch.object(
+                    ir.Graph, "__iter__", side_effect=AssertionError("scanned graph")
+                ):
+                    self.assertFalse(matcher.match(model, graph, root))
+
+    def test_multi_output_still_matches_and_preserves_output_order(self):
+        def two_outputs(op, x):
+            return op.Cast(x, to=1), op.Neg(x)
+
+        matcher = pattern.Pattern(two_outputs)
+        model = ir.from_onnx_text(
+            """
+            <ir_version: 7, opset_import: [ "" : 17]>
+            agraph (float[2] x) => (float[2] cast, float[2] neg)
+            {
+                neg = Neg(x)
+                cast = Cast<to=1>(x)
+            }
+            """
+        )
+        match = matcher.match(model, model.graph, model.graph.node(1))
+        self.assertTrue(match)
+        self.assertEqual([value.name for value in match.outputs], ["cast", "neg"])
 
     def test_pattern_impl_basic_functionality(self):
         """Test that Pattern can be created and used independently."""

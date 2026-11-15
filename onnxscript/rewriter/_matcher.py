@@ -391,6 +391,11 @@ class SimplePatternMatcher(PatternMatcher):
             # that can be used for debugging and testing. The GenericPatternMatcher is a
             # more sophisticated implementation, but incomplete.
             pattern_output_nodes = self.pattern.output_nodes
+            # Reject an incompatible fixed root before scanning the whole graph
+            # for the other outputs. Otherwise each failed match costs O(graph size).
+            self._init_match(verbose)
+            if pattern_output_nodes and not pattern_output_nodes[0].matches(node, self._match):
+                return self._match
             op_to_nodes: dict[tuple[str, str, str], list[ir.Node]] = {}
             for n in graph_or_function:
                 op_to_nodes.setdefault(n.op_identifier(), []).append(n)
